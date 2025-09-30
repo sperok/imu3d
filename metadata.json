@@ -1,0 +1,5 @@
+{
+  "name": "IMU 3D Visualizer",
+  "description": "A web application that uses the WebHID API to connect to an IMU (accelerometer and gyroscope) and visualizes its absolute position and orientation in a 3D space. It calculates the device's pose from a known starting point by processing streaming sensor data.",
+  "requestFramePermissions": []
+}
