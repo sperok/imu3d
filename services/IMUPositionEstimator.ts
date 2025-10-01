@@ -1,12 +1,12 @@
 
 import * as THREE from 'three';
-import type { IMUData, Pose } from '../types';
+import type { IMUData, Pose, SensorSample } from '../types';
 
 // Constants for sensor data conversion.
 // These values depend on the specific IMU's configuration (e.g., range).
 // Using common values for a hypothetical IMU.
 // Accelerometer: +/- 8g range for a 16-bit ADC.
-const ACCEL_SENSITIVITY = (8 * 9.81) / 32768.0; 
+const ACCEL_SENSITIVITY = (8 * 9.81) / 32768.0;
 // Gyroscope: +/- 2000 degrees/sec range for a 16-bit ADC.
 const GYRO_SENSITIVITY = (2000 * Math.PI / 180.0) / 32768.0;
 
@@ -31,39 +31,39 @@ export class IMUPositionEstimator {
     this.orientation.set(0, 0, 0, 1);
     this.lastTimestamp = null;
   }
-  
-  public update(data: IMUData, timestamp: number): void {
+
+  public update(data: SensorSample, timestamp: number): void {
     if (this.lastTimestamp === null) {
       this.lastTimestamp = timestamp;
       return;
     }
-    
+
     const dt = (timestamp - this.lastTimestamp) / 1000.0; // Delta time in seconds
     if (dt <= 0) return;
 
     // 1. Update orientation with gyroscope data
-    const gx = data.gx * GYRO_SENSITIVITY;
-    const gy = data.gy * GYRO_SENSITIVITY;
-    const gz = data.gz * GYRO_SENSITIVITY;
-    
+    const gx = data.gyro.x * GYRO_SENSITIVITY;
+    const gy = data.gyro.y * GYRO_SENSITIVITY;
+    const gz = data.gyro.z * GYRO_SENSITIVITY;
+
     const deltaRotation = new THREE.Quaternion();
     const rotationAxis = new THREE.Vector3(gx, gy, gz);
     const angle = rotationAxis.length() * dt;
     rotationAxis.normalize();
     deltaRotation.setFromAxisAngle(rotationAxis, angle);
-    
+
     this.orientation.multiplyQuaternions(this.orientation, deltaRotation);
     this.orientation.normalize();
 
     // 2. Get linear acceleration in world frame
-    const ax = data.ax * ACCEL_SENSITIVITY;
-    const ay = data.ay * ACCEL_SENSITIVITY;
-    const az = data.az * ACCEL_SENSITIVITY;
+    const ax = data.acc.x * ACCEL_SENSITIVITY;
+    const ay = data.acc.y * ACCEL_SENSITIVITY;
+    const az = data.acc.z * ACCEL_SENSITIVITY;
     const localAccel = new THREE.Vector3(ax, ay, az);
 
     // Estimate gravity in the device's local frame by rotating the world gravity vector
     const gravityInDeviceFrame = GRAVITY.clone().applyQuaternion(this.orientation.clone().invert());
-    
+
     // Subtract gravity to get linear acceleration
     const linearAccelLocal = localAccel.clone().sub(gravityInDeviceFrame);
 
@@ -74,7 +74,7 @@ export class IMUPositionEstimator {
     if (linearAccelWorld.length() < 0.1) {
         linearAccelWorld.set(0,0,0);
     }
-    
+
     // 3. Integrate acceleration to get velocity
     this.velocity.addScaledVector(linearAccelWorld, dt);
 
@@ -83,7 +83,7 @@ export class IMUPositionEstimator {
 
     this.lastTimestamp = timestamp;
   }
-  
+
   public getPose(): Pose {
     return {
       position: {

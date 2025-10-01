@@ -1,5 +1,6 @@
 // ota.ts
 // Strongly-typed OTA (Over-The-Air) update module using WebHID feature reports
+import type { HIDDevice } from '../types';
 
 // Lightweight localization support for user-facing messages
 export interface OTAStrings {
