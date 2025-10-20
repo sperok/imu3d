@@ -26,8 +26,8 @@ export const ThreeScene: React.FC<ThreeSceneProps> = ({ pose }) => {
 
     const renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setSize(mountRef.current.clientWidth, mountRef.current.clientHeight);
-    mountRef.current.appendChild(renderer.domElement);
-    
+    //mountRef.current.appendChild(renderer.domElement);
+
     // Lighting
     const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
     scene.add(ambientLight);
@@ -49,7 +49,7 @@ export const ThreeScene: React.FC<ThreeSceneProps> = ({ pose }) => {
     const bodyGeometry = new THREE.BoxGeometry(1, 0.2, 0.5);
     const bodyMaterial = new THREE.MeshStandardMaterial({ color: 0x0891b2 }); // cyan-600
     const body = new THREE.Mesh(bodyGeometry, bodyMaterial);
-    
+
     // Add a marker for the "front" of the device
     const frontGeometry = new THREE.ConeGeometry(0.1, 0.3, 16);
     const frontMaterial = new THREE.MeshStandardMaterial({ color: 0xfacc15 }); // yellow-400
@@ -85,19 +85,23 @@ export const ThreeScene: React.FC<ThreeSceneProps> = ({ pose }) => {
     return () => {
         window.removeEventListener('resize', handleResize);
         mountRef.current?.removeChild(renderer.domElement);
+        renderer.dispose();
+        //scene.dispose();
+        //modelGroup.dispose();
+        console.log("Cleaned up Three.js scene");
     };
   }, []);
 
-  useEffect(() => {
+
     if (modelRef.current) {
         // Apply position
         modelRef.current.position.set(pose.position.x, pose.position.y, pose.position.z);
-        
+
         // Apply orientation
         const { x, y, z, w } = pose.orientation;
         modelRef.current.quaternion.set(x, y, z, w);
     }
-  }, [pose]);
 
-  return <div ref={mountRef} className="w-full h-full absolute top-0 left-0" />;
+
+  return <div ref={mountRef} id="three-scene" className="w-full h-full absolute top-0 left-0" />;
 };

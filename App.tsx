@@ -11,8 +11,8 @@ import { ThreeScene } from "./components/ThreeScene";
 import { IMUPositionEstimator } from "./services/IMUPositionEstimator";
 import ota from "./services/ota";
 
-const VENDOR_ID = 0x1a86; // Example Vendor ID, change if needed
-const PRODUCT_ID = 0xe025; // Example Product ID, change if needed
+const VENDOR_ID = 0x1915; // Cato
+const PRODUCT_ID = 0x52dd;
 
 const App: React.FC = () => {
   const [device, setDevice] = useState<HIDDevice | null>(null);
@@ -34,6 +34,7 @@ const App: React.FC = () => {
   });
 
   const positionEstimator = useRef<IMUPositionEstimator | null>(null);
+  const firstTimestampRef = useRef<number>(0);
 
   useEffect(() => {
     positionEstimator.current = new IMUPositionEstimator();
@@ -45,59 +46,62 @@ const App: React.FC = () => {
     }
   }, []);
 
-  const handleInputReport = useCallback(
-    (event: HIDInputReportEvent) => {
-      if (!positionEstimator.current) return;
+  const handleInputReport = useCallback((event: HIDInputReportEvent) => {
+    if (!positionEstimator.current) return;
 
-      const { data, device: hidDevice, reportId } = event;
+    const { data, device: hidDevice, reportId } = event;
 
-      if (reportId !== 7) {
-        return;
-      }
+    if (reportId !== 7) {
+      return;
+    }
 
-      // This is a simplified parsing logic. A real-world application should use
-      // device.collections to dynamically find the correct report ID and the byte offsets
-      // for each sensor axis based on HID usages (e.g., Accelerometer X, Gyroscope Z).
-      // For this example, we assume a fixed structure:
-      // - 6 axes of data (ax, ay, az, gx, gy, gz)
-      // - Each axis is a 32-bit float (little-endian)
-      // - The data starts at byte 0 of the report.
-      if (data.byteLength < 28) {
-        console.warn("Received data packet is too small.", data.byteLength);
-        return;
-      }
+    // This is a simplified parsing logic. A real-world application should use
+    // device.collections to dynamically find the correct report ID and the byte offsets
+    // for each sensor axis based on HID usages (e.g., Accelerometer X, Gyroscope Z).
+    // For this example, we assume a fixed structure:
+    // - 6 axes of data (ax, ay, az, gx, gy, gz)
+    // - Each axis is a 32-bit float (little-endian)
+    // - The data starts at byte 0 of the report.
+    if (data.byteLength < 28) {
+      console.warn("Received data packet is too small.", data.byteLength);
+      return;
+    }
 
-      const ct = data.getUint32(0, true);
-      const dt = (collectedSamplesRef.current.length > 0
-        ? ct - collectedSamplesRef.current[collectedSamplesRef.current.length - 1].ts : 0);
+    let dt = 0;
+    let ct = 0;
+    if (collectedSamplesRef.current.length > 0) {
+      ct = data.getUint32(0, true) - firstTimestampRef.current;
+      dt =
+        ct -
+        collectedSamplesRef.current[collectedSamplesRef.current.length - 1].ts;
+    } else {
+      firstTimestampRef.current = data.getUint32(0, true);
+    }
 
-      const rawData: SensorSample = {
-        ts: ct,
-        dt: dt,
-        acc: {
-          x: data.getFloat32(4, true),
-          y: data.getFloat32(8, true),
-          z: data.getFloat32(12, true),
-        },
-        gyro: {
-          x: data.getFloat32(16, true),
-          y: data.getFloat32(20, true),
-          z: data.getFloat32(24, true),
-        },
-      };
+    const rawData: SensorSample = {
+      ts: ct,
+      dt: dt,
+      acc: {
+        x: data.getFloat32(4, true),
+        y: data.getFloat32(8, true),
+        z: data.getFloat32(12, true),
+      },
+      gyro: {
+        x: data.getFloat32(16, true),
+        y: data.getFloat32(20, true),
+        z: data.getFloat32(24, true),
+      },
+    };
 
-      setImuData(rawData);
-
-      if (isCollectingRef.current) {
-        collectedSamplesRef.current.push(rawData);
-      }
-
+    if (isCollectingRef.current) {
+      collectedSamplesRef.current.push(rawData);
+    }
+    /*
       positionEstimator.current.update(rawData, event.timeStamp);
       const newPose = positionEstimator.current.getPose();
       setPose(newPose);
-    },
-    []
-  );
+      */
+  }, []);
 
   const connectDevice = useCallback(async () => {
     if (!isHidSupported) {
@@ -108,14 +112,13 @@ const App: React.FC = () => {
     setError(null);
 
     try {
-      const devices = await navigator.hid.requestDevice({
-        filters: [
-          // Use a specific vendor/product ID for a known device
-          // { vendorId: VENDOR_ID, productId: PRODUCT_ID },
-          // Or use a more generic filter by HID usage page for sensors
-          { vendorId: 0x1915 }, // Vendor-defined usage page is a common fallback
-        ],
-      });
+      let devices: HIDDevice[];
+      devices = await navigator.hid.getDevices();
+      if (devices.length == 0) {
+        devices = await navigator.hid.requestDevice({
+          filters: [{ vendorId: VENDOR_ID, productId: PRODUCT_ID }],
+        });
+      }
 
       if (!devices.length) {
         setIsConnecting(false);
@@ -156,6 +159,7 @@ const App: React.FC = () => {
       setDevice(null);
       setImuData(null);
       setIsStreaming(false);
+      setCountdown(null);
       setCollectedSamples([]);
     }
   }, [device, handleInputReport]);
@@ -193,11 +197,17 @@ const App: React.FC = () => {
         setIsCollecting(false);
         setCollectedSamples(collectedSamplesRef.current);
 
-
         // Here you can process the collectedSamples
         console.log("Collected samples:", collectedSamplesRef.current);
-        const totalDt = collectedSamplesRef.current.reduce((a, b) => a + b.dt, 0);
-        console.log("Total, avg delta time:", totalDt, totalDt / collectedSamplesRef.current.length);
+        const totalDt = collectedSamplesRef.current.reduce(
+          (a, b) => a + b.dt,
+          0
+        );
+        console.log(
+          "Total, avg delta time:",
+          totalDt,
+          totalDt / collectedSamplesRef.current.length
+        );
 
         setCountdown(null);
       }, 2000);
@@ -222,13 +232,6 @@ const App: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-gray-900 text-gray-200 font-sans p-4 lg:p-6 flex flex-col">
-      <header className="mb-4">
-        <h1 className="text-3xl font-bold text-cyan-400">IMU 3D Visualizer</h1>
-        <p className="text-gray-400">
-          Visualizing 3D position and orientation from IMU data via WebHID.
-        </p>
-      </header>
-
       <div className="flex-grow grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2 bg-gray-800 rounded-lg shadow-2xl p-4 flex flex-col">
           <div className="flex-grow relative min-h-[300px] lg:min-h-0">
@@ -238,9 +241,6 @@ const App: React.FC = () => {
 
         <div className="bg-gray-800 rounded-lg shadow-2xl p-6 flex flex-col space-y-6">
           <div>
-            <h2 className="text-xl font-semibold text-cyan-300 mb-3">
-              Controls
-            </h2>
             <div className="space-y-3">
               {!device ? (
                 <button
@@ -248,120 +248,107 @@ const App: React.FC = () => {
                   disabled={isConnecting || !isHidSupported}
                   className="w-full bg-cyan-600 hover:bg-cyan-700 text-white font-bold py-3 px-4 rounded-lg transition-colors duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  {isConnecting ? "Connecting..." : "Connect IMU Device"}
+                  {isConnecting ? "Connecting..." : "Connect Cato"}
                 </button>
               ) : (
-                <button
-                  onClick={disconnectDevice}
-                  className="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-3 px-4 rounded-lg transition-colors duration-200"
-                >
-                  Disconnect Device
-                </button>
+                <>
+                  <button
+                    onClick={disconnectDevice}
+                    className="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-3 px-4 rounded-lg transition-colors duration-200"
+                  >
+                    Disconnect {device.productName}
+                  </button>
+
+                  <button
+                    onClick={startTwoSecondSample}
+                    disabled={!device || isCollecting || countdown !== null}
+                    className="w-full bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-4 rounded-lg transition-colors duration-200 disabled:opacity-50"
+                  >
+                    {countdown !== null
+                      ? `Starting in ${countdown}...`
+                      : isCollecting
+                      ? "Collecting..."
+                      : "Start 2s Sample"}
+                  </button>
+                  <button
+                    onClick={resetPosition}
+                    disabled={!device}
+                    className="w-full bg-yellow-600 hover:bg-yellow-700 text-white font-bold py-3 px-4 rounded-lg transition-colors duration-200 disabled:opacity-50"
+                  >
+                    Reset Position & Orientation
+                  </button>
+                </>
               )}
-              <button
-                onClick={startTwoSecondSample}
-                disabled={!device || isCollecting || countdown !== null}
-                className="w-full bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-4 rounded-lg transition-colors duration-200 disabled:opacity-50"
-              >
-                {countdown !== null
-                  ? `Starting in ${countdown}...`
-                  : isCollecting
-                  ? "Collecting..."
-                  : "Start 2s Sample"}
-              </button>
-              <button
-                onClick={resetPosition}
-                disabled={!device}
-                className="w-full bg-yellow-600 hover:bg-yellow-700 text-white font-bold py-3 px-4 rounded-lg transition-colors duration-200 disabled:opacity-50"
-              >
-                Reset Position & Orientation
-              </button>
             </div>
             {error && <p className="text-red-400 mt-3">{error}</p>}
           </div>
 
-          <div className="flex-grow space-y-6">
-            <InfoPanel title="Device Status">
-              <p className="text-lg">
-                Status:{" "}
-                <span className={`font-semibold ${statusColor}`}>{status}</span>
-              </p>
-              {device && (
-                <p className="text-sm text-gray-400">{device.productName}</p>
-              )}
+          {collectedSamples.length > 0 && (
+            <InfoPanel
+              title={"Sensor Data: " + collectedSamples.length + " samples"}
+            >
+              <table className="w-full table-auto border-collapse mb-2">
+                <thead>
+                  <tr className="bg-gray-700">
+                    <th className="px-1 py-1 text-right text-sm font-semibold">
+                      ts
+                    </th>
+                    <th className="px-1 py-1 text-right text-sm font-semibold">
+                      ∆t
+                    </th>
+                    <th className="px-1 py-1 text-right text-sm font-semibold">
+                      AX
+                    </th>
+                    <th className="px-1 py-1 text-right text-sm font-semibold">
+                      AY
+                    </th>
+                    <th className="px-1 py-1 text-right text-sm font-semibold">
+                      AZ
+                    </th>
+                    <th className="px-1 py-1 text-right text-sm font-semibold">
+                      GX
+                    </th>
+                    <th className="px-1 py-1 text-right text-sm font-semibold">
+                      GY
+                    </th>
+                    <th className="px-1 py-1 text-right text-sm font-semibold">
+                      GZ
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {collectedSamples.map((sample, index) => (
+                    <tr key={index} className="border-b border-gray-700">
+                      <td className="px-1 py-0 text-right font-mono text-xs">
+                        {(sample.ts / 1000).toFixed(3)}
+                      </td>
+                      <td className="px-1 py-0 text-right font-mono text-xs">
+                        {sample.dt}
+                      </td>
+                      <td className="px-1 py-0 text-right font-mono text-xs">
+                        {sample.acc.x.toFixed(2)}
+                      </td>
+                      <td className="px-1 py-0 text-right font-mono text-xs">
+                        {sample.acc.y.toFixed(2)}
+                      </td>
+                      <td className="px-1 py-0 text-right font-mono text-xs">
+                        {sample.acc.z.toFixed(2)}
+                      </td>
+                      <td className="px-1 py-0 text-right font-mono text-xs">
+                        {sample.gyro.x.toFixed(2)}
+                      </td>
+                      <td className="px-1 py-0 text-right font-mono text-xs">
+                        {sample.gyro.y.toFixed(2)}
+                      </td>
+                      <td className="px-1 py-0 text-right font-mono text-xs">
+                        {sample.gyro.z.toFixed(2)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </InfoPanel>
-
-            <InfoPanel title="Live Sensor Data (Raw)">
-              {imuData ? (
-                <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
-                  <span>
-                    AX:{" "}
-                    <span className="font-mono text-cyan-400">
-                      {imuData.acc.x.toFixed(3)}
-                    </span>
-                  </span>
-                  <span>
-                    GX:{" "}
-                    <span className="font-mono text-purple-400">
-                      {imuData.gyro.x.toFixed(3)}
-                    </span>
-                  </span>
-                  <span>
-                    AY:{" "}
-                    <span className="font-mono text-cyan-400">
-                      {imuData.acc.y.toFixed(3)}
-                    </span>
-                  </span>
-                  <span>
-                    GY:{" "}
-                    <span className="font-mono text-purple-400">
-                      {imuData.gyro.y.toFixed(3)}
-                    </span>
-                  </span>
-                  <span>
-                    AZ:{" "}
-                    <span className="font-mono text-cyan-400">
-                      {imuData.acc.z.toFixed(3)}
-                    </span>
-                  </span>
-                  <span>
-                    GZ:{" "}
-                    <span className="font-mono text-purple-400">
-                      {imuData.gyro.z.toFixed(3)}
-                    </span>
-                  </span>
-                </div>
-              ) : (
-                <p className="text-gray-500">Waiting for data...</p>
-              )}
-            </InfoPanel>
-
-            <InfoPanel title="Calculated Position">
-              <div className="space-y-1">
-                <p>
-                  X:{" "}
-                  <span className="font-mono text-green-400">
-                    {pose.position.x.toFixed(3)}
-                  </span>{" "}
-                  m
-                </p>
-                <p>
-                  Y:{" "}
-                  <span className="font-mono text-green-400">
-                    {pose.position.y.toFixed(3)}
-                  </span>{" "}
-                  m
-                </p>
-                <p>
-                  Z:{" "}
-                  <span className="font-mono text-green-400">
-                    {pose.position.z.toFixed(3)}
-                  </span>{" "}
-                  m
-                </p>
-              </div>
-            </InfoPanel>
-          </div>
+          )}
         </div>
       </div>
     </div>
@@ -378,7 +365,7 @@ const InfoPanel: React.FC<InfoPanelProps> = ({ title, children }) => (
     <h3 className="text-md font-semibold text-gray-300 border-b border-gray-600 pb-2 mb-3">
       {title}
     </h3>
-    {children}
+    <div className="max-h-48 overflow-y-auto">{children}</div>
   </div>
 );
 
